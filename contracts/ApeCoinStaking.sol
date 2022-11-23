@@ -1045,14 +1045,15 @@ contract ApeCoinStaking is Ownable {
         updatePool(_poolId);
         uint256 tokenId;
         uint256 amount;
+        Position storage position;
         uint256 len = _nfts.length;
         for(uint256 i; i < len;) {
             tokenId = _nfts[i].tokenId;
-            amount = _nfts[i].amount;
-            Position storage position = nftPosition[_poolId][tokenId];
+            position = nftPosition[_poolId][tokenId];
             if (position.stakedAmount == 0)
                 if (nftContracts[_poolId].ownerOf(tokenId) != msg.sender)
                     revert CallerNotOwner();
+            amount = _nfts[i].amount;
             _depositNftGuard(_poolId, position, amount);
             emit DepositNft(msg.sender, _poolId, amount, tokenId);
             unchecked {
@@ -1130,9 +1131,9 @@ contract ApeCoinStaking is Ownable {
         uint256 len = _nfts.length;
         for(uint256 i; i < len;) {
             tokenId = _nfts[i];
-            Position storage position = nftPosition[_poolId][tokenId];
             if (nftContracts[_poolId].ownerOf(tokenId) != msg.sender)
                 revert CallerNotOwner();
+            Position storage position = nftPosition[_poolId][tokenId];
             rewardsToBeClaimed = _claim(_poolId, position, _recipient);
             emit ClaimRewardsNft(msg.sender, _poolId, rewardsToBeClaimed, tokenId);
             unchecked {
@@ -1150,14 +1151,12 @@ contract ApeCoinStaking is Ownable {
         PairingStatus storage secondToMain;
         for(uint256 i; i < len;) {
             mainTokenId = _pairs[i].mainTokenId;
-            bakcTokenId = _pairs[i].bakcTokenId;
-
-            position = nftPosition[BAKC_POOL_ID][bakcTokenId];
-
             if (
                 nftContracts[mainTypePoolId].ownerOf(mainTokenId) !=
                 msg.sender
             ) revert NotOwnerOfMain();
+
+            bakcTokenId = _pairs[i].bakcTokenId;
 
             if (
                 nftContracts[BAKC_POOL_ID].ownerOf(bakcTokenId) !=
@@ -1173,6 +1172,8 @@ contract ApeCoinStaking is Ownable {
                 secondToMain.tokenId != mainTokenId ||
                 !secondToMain.isPaired
             ) revert ProvidedTokensNotPaired();
+
+            position = nftPosition[BAKC_POOL_ID][bakcTokenId];
 
             uint256 rewardsToBeClaimed = _claim(BAKC_POOL_ID, position, _recipient);
             emit ClaimRewardsPairNft(msg.sender, rewardsToBeClaimed, mainTypePoolId, mainTokenId, bakcTokenId);
@@ -1205,9 +1206,9 @@ contract ApeCoinStaking is Ownable {
         Position storage position;
         for(uint256 i; i < len;) {
             tokenId = _nfts[i].tokenId;
-            amount = _nfts[i].amount;
             if (nftContracts[_poolId].ownerOf(tokenId) != msg.sender)
                 revert CallerNotOwner();
+            amount = _nfts[i].amount;
             position = nftPosition[_poolId][tokenId];
             if (amount == position.stakedAmount) {
                 uint256 rewardsToBeClaimed = _claim(_poolId, position, _recipient);
