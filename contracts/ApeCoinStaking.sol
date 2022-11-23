@@ -260,7 +260,7 @@ contract ApeCoinStaking is Ownable {
     DashboardPair private NULL_PAIR = DashboardPair(0, 0);
 
     /// @notice Internal ApeCoin amount for distributing staking reward claims
-    IERC20 public immutable apeCoin;
+    IERC20 private immutable apeCoin;
     uint256 private constant APE_COIN_PRECISION = 1e18;
     uint256 private constant MIN_DEPOSIT = 1 * APE_COIN_PRECISION;
     uint256 private constant SECONDS_PER_HOUR = 3600;
@@ -270,18 +270,18 @@ contract ApeCoinStaking is Ownable {
     uint256 constant BAYC_POOL_ID = 1;
     uint256 constant MAYC_POOL_ID = 2;
     uint256 constant BAKC_POOL_ID = 3;
-    Pool[4] public pools;
+    Pool[4] private pools;
 
     /// @dev user => position
-    mapping (address => Position) public addressPosition;
+    mapping (address => Position) private addressPosition;
     /// @dev NFT contract mapping per pool
-    mapping(uint256 => ERC721Enumerable) public nftContracts;
+    mapping(uint256 => ERC721Enumerable) private nftContracts;
     /// @dev poolId => tokenId => nft position
-    mapping(uint256 => mapping(uint256 => Position)) public nftPosition;
+    mapping(uint256 => mapping(uint256 => Position)) private nftPosition;
     /// @dev main type pool ID: 1: BAYC 2: MAYC => main token ID => bakc token ID
-    mapping(uint256 => mapping(uint256 => PairingStatus)) public mainToBakc;
+    mapping(uint256 => mapping(uint256 => PairingStatus)) private mainToBakc;
     /// @dev bakc Token ID => main type pool ID: 1: BAYC 2: MAYC => main token ID
-    mapping(uint256 => mapping(uint256 => PairingStatus)) public bakcToMain;
+    mapping(uint256 => mapping(uint256 => PairingStatus)) private bakcToMain;
 
     /** Custom Events */
     event UpdatePool(
@@ -1025,6 +1025,38 @@ contract ApeCoinStaking is Ownable {
     /// @notice the previous whole hour of a timestamp
     function getPreviousTimestampHour() internal view returns (uint256) {
         return block.timestamp - (getMinute(block.timestamp) * 60 + getSecond(block.timestamp));
+    }
+
+    function getAddressPosition(address _recipient)
+        external
+        view
+        returns (Position memory)
+    {
+        return addressPosition[_recipient];
+    }
+
+    function getNftPosition(uint256 _poolId, uint256 _tokenId)
+        external
+        view
+        returns (Position memory)
+    {
+        return nftPosition[_poolId][_tokenId];
+    }
+
+    function getMainToBakc(uint256 _poolId, uint256 _tokenId)
+        external
+        view
+        returns (PairingStatus memory)
+    {
+        return mainToBakc[_poolId][_tokenId];
+    }
+
+    function getBakcToMain(uint256 _tokenId, uint256 _poolId)
+        external
+        view
+        returns (PairingStatus memory)
+    {
+        return bakcToMain[_tokenId][_poolId];
     }
 
     // Private Methods - shared logic
