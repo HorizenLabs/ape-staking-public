@@ -689,7 +689,7 @@ contract ApeCoinStaking is Ownable {
         if (block.timestamp <= pool.lastRewardedTimestampHour + SECONDS_PER_HOUR) return;
 
         uint48 lastTimestampHour = pool.timeRanges[pool.timeRanges.length-1].endTimestampHour;
-        uint48 previousTimestampHour = uint48(getPreviousTimestampHour(block.timestamp));
+        uint48 previousTimestampHour = uint48(getPreviousTimestampHour());
 
         if (pool.stakedAmount == 0) {
             pool.lastRewardedTimestampHour = previousTimestampHour > lastTimestampHour ? lastTimestampHour : previousTimestampHour;
@@ -1000,7 +1000,7 @@ contract ApeCoinStaking is Ownable {
         Pool memory pool = pools[_poolId];
         Position memory position = _poolId == 0 ? addressPosition[_address]: nftPosition[_poolId][_tokenId];
 
-        (uint256 rewardsSinceLastCalculated,) = rewardsBy(_poolId, pool.lastRewardedTimestampHour, getPreviousTimestampHour(block.timestamp));
+        (uint256 rewardsSinceLastCalculated,) = rewardsBy(_poolId, pool.lastRewardedTimestampHour, getPreviousTimestampHour());
         uint256 accumulatedRewardsPerShare = pool.accumulatedRewardsPerShare;
 
         if (block.timestamp > pool.lastRewardedTimestampHour + SECONDS_PER_HOUR && pool.stakedAmount != 0) {
@@ -1023,8 +1023,8 @@ contract ApeCoinStaking is Ownable {
     }
 
     /// @notice the previous whole hour of a timestamp
-    function getPreviousTimestampHour(uint256 timestamp) internal pure returns (uint256) {
-        return timestamp - (getMinute(timestamp) * 60 + getSecond(timestamp));
+    function getPreviousTimestampHour() internal view returns (uint256) {
+        return block.timestamp - (getMinute(block.timestamp) * 60 + getSecond(block.timestamp));
     }
 
     // Private Methods - shared logic
