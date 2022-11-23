@@ -661,11 +661,13 @@ contract ApeCoinStaking is Ownable {
      */
     function rewardsBy(uint256 _poolId, uint256 _from, uint256 _to) public view returns (uint256, uint256) {
         Pool memory pool = pools[_poolId];
-        if(_to < pool.timeRanges[0].startTimestampHour) return (0, pool.lastRewardsRangeIndex);
-
         uint256 currentIndex = pool.lastRewardsRangeIndex;
+        if(_to < pool.timeRanges[0].startTimestampHour) return (0, currentIndex);
+
         while(_from > pool.timeRanges[currentIndex].endTimestampHour && _to > pool.timeRanges[currentIndex].endTimestampHour) {
-            ++currentIndex;
+            unchecked {
+                ++currentIndex;
+            }
         }
 
         uint256 rewards;
