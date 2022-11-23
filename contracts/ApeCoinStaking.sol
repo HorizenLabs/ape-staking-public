@@ -89,21 +89,150 @@ contract ApeCoinStaking is Ownable {
     using SafeCast for int256;
 
     /// @notice State for ApeCoin, BAYC, MAYC, and Pair Pools
+    /** OPTIMIZE
+        following struct optimizations are made to make the most out of storage slots while adhereing to the requirements
+    */
+    /** OPTIMIZE
+     * 'lastRewardedTimestampHour'
+            8925460 years is left for it to max out on 48 bits
+
+            we have: block.timestamp + 3 years = 1.77e9 << 2**48-1 = 2.8e14
+            RESULT: safe to use 96 bits
+     *  'lastRewardsRangeIndex'
+            since each index refers to the position of TimeRanges which has a period of 3 months
+            and in total we have 3 year staking, so in total 3 * 4 * 3 = 36
+
+            we have 3 * 4 * 3 = 36 << 2**16 - 1
+            RESULT: safe to use 16 bits 
+     * 'stakedAmount'
+            the extreme value that can be staked is the total supply for extra safety:
+             which is 1e9 * 1e18
+    
+            we have 1e9 * 1e18 = 1e27 << 2**96-1 = 7.9e28
+            RESULT: safe to use 96 bits
+     * 'accumulatedRewardsPerShare'
+            the accumulation of the calculated:
+              +=  (rewards * APE_COIN_PRECISION) / pool.stakedAmount
+            and the least pool.stakedAmount can reach to is 1 APE$ which is 1e18
+            and the max amount for rewards is the total possible rewards 175 * 1e6 * 1e18
+            substitute within the forumla results in total possible rewards 
+            since APE_COIN_PRECISION cancels out MAX of pool.stakedAmount
+
+            we have 175 * 1e6 * 1e18 = 1.75e+26 << 2**96 - 1 = 7.9e28 
+            RESULT: safe to use 96 bits
+     */
     struct Pool {
-        uint256 lastRewardedTimestampHour;
-        uint256 lastRewardsRangeIndex;
-        uint256 stakedAmount;
-        uint256 accumulatedRewardsPerShare;
+        uint48 lastRewardedTimestampHour;
+        uint16 lastRewardsRangeIndex;
+        uint96 stakedAmount;
+        uint96 accumulatedRewardsPerShare;
         TimeRange[] timeRanges;
     }
 
     /// @notice Pool rules valid for a given duration of time.
     /// @dev All TimeRange timestamp values must represent whole hours
+
+    /** OPTIMIZE
+     * 'startTimestampHour' and 'endTimestampHour' can perfectly fit in 48 bits for each
+     * 'rewardsPerHour' 
+       highest possible value is 16_486_750e18 * 3600 / 91 days ~= 7.55e21 << 2**80 - 1 ~= 1.2e24
+
+       RESULT: safe to use 80 bits
+     * 'capPerPosition'
+        highest cap amount is 10094 APE$
+        since 10094e18 << 2**80 - 1 ~= 1.2e24
+
+        RESULT: safe to use 80 bits
+     */
     struct TimeRange {
-        uint256 startTimestampHour;
-        uint256 endTimestampHour;
-        uint256 rewardsPerHour;
-        uint256 capPerPosition;
+        uint48 startTimestampHour;
+        uint48 endTimestampHour;
+        uint80 rewardsPerHour;
+        uint80 capPerPosition;
+    }
+
+    /// @dev Per address amount and reward tracking
+    struct Position {
+        /**
+         * 'stakedAmount'
+            the highest that can be staked is the capped amount which is 10094e18
+    
+            we have 10094e18 = 1.0094e22 << 2**80-1 = 1.2e24
+            RESULT: safe to use 80 bits
+         * 'rewardsDebt'
+            = (position deposited / withdraw amount) * pool.accumulatedRewardsPerShare
+            since the capped amount is 10094e18
+            and accumulatedRewardsPerShare as we have deomnstrated previously would have
+            total rewards as the max value 175 * 1e6 * 1e18
+
+            we have 10094e18 * 175 * 1e6 * 1e18 = 1.77e+48 << 2**176-1 = 9.57e+52
+            RESULT: safe to use 176 bits
+         */
+        // 1.75e+26 * 10094e18
+        uint80 stakedAmount;
+        int176 rewardsDebt;
+        // uint256 stakedAmount;
+        // int256 rewardsDebt;
+    }
+
+    /** OPTIMIZE
+     * 'tokenId':
+        it has very low values in the 10s of thousands
+        
+        RESULT: safe to use 32 btis.
+     * 'amount':
+            highest amount is the highest cap amount which is 10094 APE$
+            since 10094e18 << 2**224 - 1 ~= 2.69e67
+        
+        RESULT: safe to use 224 btis.
+     */
+    /// @dev Struct for depositing and withdrawing from the BAYC and MAYC NFT pools
+    struct SingleNft {
+        uint32 tokenId;
+        uint224 amount;
+    }
+
+    /// @dev Struct for depositing and withdrawing from the BAKC (Pair) pool
+    /** OPTIMIZE
+     * 'mainTokenId' and 'bakcTokenId':
+        it has very low values in the 10s of thousands
+        
+        RESULT: safe to use 32 btis.
+     * 'amount':
+            highest amount is the highest cap amount which is 10094 APE$
+            since 10094e18 << 2**192 - 1 ~= 6.27e57
+    
+        RESULT: safe to use 192 btis.
+     */
+    struct PairNftWithAmount {
+        uint32 mainTokenId;
+        uint32 bakcTokenId;
+        uint192 amount;
+    }
+
+    /// @dev Struct for claiming from an NFT pool
+    /** OPTIMIZE
+     * 'mainTokenId' and 'bakcTokenId':
+        it has very low values in the 10s of thousands
+        
+        RESULT: safe to use 128 btis.
+     */
+    struct PairNft {
+        uint128 mainTokenId;
+        uint128 bakcTokenId;
+    }
+
+    /// @dev NFT paired status.  Can be used bi-directionally (BAYC/MAYC -> BAKC) or (BAKC -> BAYC/MAYC)
+    /** OPTIMIZE
+     * 'tokenId':
+        it has very low values in the 10s of thousands
+        RESULT: safe to use 248 btis.
+     * 'isPaired'
+        would fit in the remaining 8 bits within storage slot
+     */
+    struct PairingStatus {
+        uint248 tokenId;
+        bool isPaired;
     }
 
     /// @dev Convenience struct for front-end applications
@@ -111,35 +240,6 @@ contract ApeCoinStaking is Ownable {
         uint256 poolId;
         uint256 stakedAmount;
         TimeRange currentTimeRange;
-    }
-
-    /// @dev Per address amount and reward tracking
-    struct Position {
-        uint256 stakedAmount;
-        int256 rewardsDebt;
-    }
-    mapping (address => Position) public addressPosition;
-
-    /// @dev Struct for depositing and withdrawing from the BAYC and MAYC NFT pools
-    struct SingleNft {
-        uint256 tokenId;
-        uint256 amount;
-    }
-    /// @dev Struct for depositing and withdrawing from the BAKC (Pair) pool
-    struct PairNftWithAmount {
-        uint256 mainTokenId;
-        uint256 bakcTokenId;
-        uint256 amount;
-    }
-    /// @dev Struct for claiming from an NFT pool
-    struct PairNft {
-        uint256 mainTokenId;
-        uint256 bakcTokenId;
-    }
-    /// @dev NFT paired status.  Can be used bi-directionally (BAYC/MAYC -> BAKC) or (BAKC -> BAYC/MAYC)
-    struct PairingStatus {
-        uint256 tokenId;
-        bool isPaired;
     }
 
     // @dev UI focused payload
@@ -172,6 +272,8 @@ contract ApeCoinStaking is Ownable {
     uint256 constant BAKC_POOL_ID = 3;
     Pool[4] public pools;
 
+    /// @dev user => position
+    mapping (address => Position) public addressPosition;
     /// @dev NFT contract mapping per pool
     mapping(uint256 => ERC721Enumerable) public nftContracts;
     /// @dev poolId => tokenId => nft position
@@ -509,7 +611,7 @@ contract ApeCoinStaking is Ownable {
         uint256 hoursInSeconds = _endTimeStamp - _startTimestamp;
         uint256 rewardsPerHour = _amount * SECONDS_PER_HOUR / hoursInSeconds;
 
-        TimeRange memory next = TimeRange(_startTimestamp, _endTimeStamp, rewardsPerHour, _capPerPosition);
+        TimeRange memory next = TimeRange(uint48(_startTimestamp), uint48(_endTimeStamp), uint80(rewardsPerHour), uint80(_capPerPosition));
         pool.timeRanges.push(next);
     }
 
@@ -579,8 +681,8 @@ contract ApeCoinStaking is Ownable {
         if (block.timestamp < pool.timeRanges[0].startTimestampHour) return;
         if (block.timestamp <= pool.lastRewardedTimestampHour + SECONDS_PER_HOUR) return;
 
-        uint256 lastTimestampHour = pool.timeRanges[pool.timeRanges.length-1].endTimestampHour;
-        uint256 previousTimestampHour = getPreviousTimestampHour(block.timestamp);
+        uint48 lastTimestampHour = pool.timeRanges[pool.timeRanges.length-1].endTimestampHour;
+        uint48 previousTimestampHour = uint48(getPreviousTimestampHour(block.timestamp));
 
         if (pool.stakedAmount == 0) {
             pool.lastRewardedTimestampHour = previousTimestampHour > lastTimestampHour ? lastTimestampHour : previousTimestampHour;
@@ -589,9 +691,9 @@ contract ApeCoinStaking is Ownable {
 
         (uint256 rewards, uint256 index) = rewardsBy(_poolId, pool.lastRewardedTimestampHour, previousTimestampHour);
         if (pool.lastRewardsRangeIndex != index) {
-            pool.lastRewardsRangeIndex = index;
+            pool.lastRewardsRangeIndex = uint16(index);
         }
-        pool.accumulatedRewardsPerShare = pool.accumulatedRewardsPerShare + (rewards * APE_COIN_PRECISION) / pool.stakedAmount;
+        pool.accumulatedRewardsPerShare = uint96(pool.accumulatedRewardsPerShare + (rewards * APE_COIN_PRECISION) / pool.stakedAmount);
         pool.lastRewardedTimestampHour = previousTimestampHour > lastTimestampHour ? lastTimestampHour : previousTimestampHour;
 
         emit UpdatePool(_poolId, pool.lastRewardedTimestampHour, pool.stakedAmount, pool.accumulatedRewardsPerShare);
@@ -922,9 +1024,12 @@ contract ApeCoinStaking is Ownable {
     function _deposit(uint256 _poolId, Position storage _position, uint256 _amount) private {
         Pool storage pool = pools[_poolId];
 
-        _position.stakedAmount += _amount;
-        pool.stakedAmount += _amount;
-        _position.rewardsDebt += (_amount * pool.accumulatedRewardsPerShare).toInt256();
+        uint80 __amount = uint80(_amount);
+        _position.stakedAmount += __amount;
+        pool.stakedAmount += __amount;
+        _position.rewardsDebt += (
+            int256(_amount * uint256(pool.accumulatedRewardsPerShare))
+        ).toInt176();
 
         apeCoin.safeTransferFrom(msg.sender, address(this), _amount);
     }
@@ -961,8 +1066,8 @@ contract ApeCoinStaking is Ownable {
                     msg.sender ||
                     bakcToMain[bakcTokenId][mainTypePoolId].isPaired
                 ) revert BAKCNotOwnedOrPaired();
-                mainToBakc[mainTypePoolId][mainTokenId] = PairingStatus(bakcTokenId, true);
-                bakcToMain[bakcTokenId][mainTypePoolId] = PairingStatus(mainTokenId, true);
+                mainToBakc[mainTypePoolId][mainTokenId] = PairingStatus(uint248(bakcTokenId), true);
+                bakcToMain[bakcTokenId][mainTypePoolId] = PairingStatus(uint248(mainTokenId), true);
             } else if (
                 mainTokenId !=
                 bakcToMain[bakcTokenId][mainTypePoolId].tokenId ||
@@ -989,10 +1094,11 @@ contract ApeCoinStaking is Ownable {
     function _claim(uint256 _poolId, Position storage _position, address _recipient) private returns (uint256) {
         Pool storage pool = pools[_poolId];
 
-        int256 accumulatedApeCoins = (_position.stakedAmount * pool.accumulatedRewardsPerShare).toInt256();
+        int256 accumulatedApeCoins = (uint256(_position.stakedAmount) *
+            pool.accumulatedRewardsPerShare).toInt256();
         uint256 rewardsToBeClaimed = (accumulatedApeCoins - _position.rewardsDebt).toUint256() / APE_COIN_PRECISION;
 
-        _position.rewardsDebt = accumulatedApeCoins;
+        _position.rewardsDebt = (accumulatedApeCoins).toInt176();
 
         if (rewardsToBeClaimed != 0) {
             apeCoin.safeTransfer(_recipient, rewardsToBeClaimed);
@@ -1049,9 +1155,12 @@ contract ApeCoinStaking is Ownable {
 
         Pool storage pool = pools[_poolId];
 
-        _position.stakedAmount -= _amount;
-        pool.stakedAmount -= _amount;
-        _position.rewardsDebt -= (_amount * pool.accumulatedRewardsPerShare).toInt256();
+        uint80 _amount_ = uint80(_amount);
+        _position.stakedAmount -= _amount_;
+        pool.stakedAmount -= _amount_;
+        _position.rewardsDebt -= (
+            int256(_amount * pool.accumulatedRewardsPerShare)
+        ).toInt176();
 
         apeCoin.safeTransfer(_recipient, _amount);
     }
