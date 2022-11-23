@@ -49,6 +49,35 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC721/extensions/ERC721Enumerable.sol";
 
 /**
+ * OPTIMIZE: 
+    all require functions turned into error statments
+    since when a transaction reverts, 
+    it consumes far less gas compared to require statments
+
+    when there is multiple boolean checks, 
+    De Morgan Theorem is used
+    ~(A AND B) <==> (~A OR ~B) 
+    ~(A OR B) <==> (~A AND ~B)
+ */
+error DepositMoreThanOneAPE();
+error InvalidPoolId();
+error StartMustBeMoreThanEnd();
+error StartNotWholeHour();
+error EndNotWholeHour();
+error StartMustEqualLastEnd();
+error CallerNotOwner();
+error TokenNotOwnedOrPaired();
+error BAKCNotOwnedOrPaired();
+error BAKCAlreadyPaired();
+error ExceededCapAmount();
+error NotOwnerOfMain();
+error NotOwnerOfBAKC();
+error ProvidedTokensNotPaired();
+error ExceededStakedAmount();
+error CallerNotTokenOwnerInPair();
+error SplitPairCantPartiallyWithdraw();
+
+/**
  * @title ApeCoin Staking Contract
  * @notice Stake ApeCoin across four different pools that release hourly rewards
  * @author HorizenLabs
@@ -243,7 +272,7 @@ contract ApeCoinStaking is Ownable {
      * @dev ApeCoin deposit must be >= 1 ApeCoin
      */
     function depositApeCoin(uint256 _amount, address _recipient) public {
-        require(_amount >= MIN_DEPOSIT, "Can't deposit less than 1 $APE");
+        if (_amount < MIN_DEPOSIT) revert DepositMoreThanOneAPE();
         updatePool(APECOIN_POOL_ID);
 
         Position storage position = addressPosition[_recipient];
@@ -464,14 +493,18 @@ contract ApeCoinStaking is Ownable {
         uint256 _endTimeStamp,
         uint256 _capPerPosition) external onlyOwner
     {
-        require (_poolId < 4, "Invalid poolId");
-        require (_startTimestamp < _endTimeStamp, "_startTimestamp should be less than _endTimeStamp");
-        require(getMinute(_startTimestamp) == 0 && getSecond(_startTimestamp) == 0, "_startTimestamp is not a whole hour");
-        require(getMinute(_endTimeStamp) == 0 && getSecond(_endTimeStamp) == 0, "_endTimeStamp is not a whole hour");
+        if (_poolId > BAKC_POOL_ID) revert InvalidPoolId();
+        if (_startTimestamp >= _endTimeStamp) revert StartMustBeMoreThanEnd();
+        if (getMinute(_startTimestamp) > 0 || getSecond(_startTimestamp) > 0)
+            revert StartNotWholeHour();
+        if (getMinute(_endTimeStamp) > 0 || getSecond(_endTimeStamp) > 0)
+            revert EndNotWholeHour();
 
         Pool storage pool = pools[_poolId];
-        require(pool.timeRanges.length == 0 || _startTimestamp == pool.timeRanges[pool.timeRanges.length-1].endTimestampHour
-            ,"_startTimestamp should be equal to the last endTimestampHour");
+        uint256 len = pool.timeRanges.length;
+        if (len > 0)
+            if (_startTimestamp != pool.timeRanges[len - 1].endTimestampHour)
+                revert StartMustEqualLastEnd();
 
         uint256 hoursInSeconds = _endTimeStamp - _startTimestamp;
         uint256 rewardsPerHour = _amount * SECONDS_PER_HOUR / hoursInSeconds;
@@ -902,7 +935,9 @@ contract ApeCoinStaking is Ownable {
             uint256 tokenId = _nfts[i].tokenId;
             uint256 amount = _nfts[i].amount;
             Position storage position = nftPosition[_poolId][tokenId];
-            require(position.stakedAmount > 0 || nftContracts[_poolId].ownerOf(tokenId) == msg.sender, "Token not owned by caller");
+            if (position.stakedAmount == 0)
+                if (nftContracts[_poolId].ownerOf(tokenId) != msg.sender)
+                    revert CallerNotOwner();
             _depositNftGuard(_poolId, position, amount);
             emit DepositNft(msg.sender, _poolId, amount, tokenId);
         }
@@ -916,16 +951,24 @@ contract ApeCoinStaking is Ownable {
             Position storage position = nftPosition[BAKC_POOL_ID][bakcTokenId];
 
             if(position.stakedAmount == 0) {
-                require(nftContracts[mainTypePoolId].ownerOf(mainTokenId) == msg.sender && !mainToBakc[mainTypePoolId][mainTokenId].isPaired
-                , "Main Token not owned by caller or already paired");
-                require(nftContracts[BAKC_POOL_ID].ownerOf(bakcTokenId) == msg.sender && !bakcToMain[bakcTokenId][mainTypePoolId].isPaired
-                ,"BAKC Token not owned by caller or already paired");
+                if (
+                    nftContracts[mainTypePoolId].ownerOf(mainTokenId) !=
+                    msg.sender ||
+                    mainToBakc[mainTypePoolId][mainTokenId].isPaired
+                ) revert TokenNotOwnedOrPaired();
+                if (
+                    nftContracts[BAKC_POOL_ID].ownerOf(bakcTokenId) !=
+                    msg.sender ||
+                    bakcToMain[bakcTokenId][mainTypePoolId].isPaired
+                ) revert BAKCNotOwnedOrPaired();
                 mainToBakc[mainTypePoolId][mainTokenId] = PairingStatus(bakcTokenId, true);
                 bakcToMain[bakcTokenId][mainTypePoolId] = PairingStatus(mainTokenId, true);
-            } else {
-                require(mainTokenId == bakcToMain[bakcTokenId][mainTypePoolId].tokenId
-                    && bakcTokenId == mainToBakc[mainTypePoolId][mainTokenId].tokenId, "BAKC Token already paired");
-            }
+            } else if (
+                mainTokenId !=
+                bakcToMain[bakcTokenId][mainTypePoolId].tokenId ||
+                bakcTokenId !=
+                mainToBakc[mainTypePoolId][mainTokenId].tokenId
+            ) revert BAKCAlreadyPaired();
 
             _depositNftGuard(BAKC_POOL_ID, position, amount);
             emit DepositPairNft(msg.sender, amount, mainTypePoolId, mainTokenId, bakcTokenId);
@@ -933,10 +976,13 @@ contract ApeCoinStaking is Ownable {
     }
 
     function _depositNftGuard(uint256 _poolId, Position storage _position, uint256 _amount) private {
-        require(_amount >= MIN_DEPOSIT, "Can't deposit less than 1 $APE");
-        require(_amount + _position.stakedAmount
-            <= pools[_poolId].timeRanges[pools[_poolId].lastRewardsRangeIndex].capPerPosition, "Can't stake more than cap amount");
-
+        if (_amount < MIN_DEPOSIT) revert DepositMoreThanOneAPE();
+        if (
+            _amount + _position.stakedAmount >
+            pools[_poolId]
+                .timeRanges[pools[_poolId].lastRewardsRangeIndex]
+                .capPerPosition
+        ) revert ExceededCapAmount();
         _deposit(_poolId, _position, _amount);
     }
 
@@ -959,7 +1005,8 @@ contract ApeCoinStaking is Ownable {
         for(uint256 i; i < _nfts.length; ++i) {
             uint256 tokenId = _nfts[i];
             Position storage position = nftPosition[_poolId][tokenId];
-            require(nftContracts[_poolId].ownerOf(tokenId) == msg.sender, "Token not owned by caller");
+            if (nftContracts[_poolId].ownerOf(tokenId) != msg.sender)
+                revert CallerNotOwner();
             uint256 rewardsToBeClaimed = _claim(_poolId, position, _recipient);
             emit ClaimRewardsNft(msg.sender, _poolId, rewardsToBeClaimed, tokenId);
         }
@@ -971,13 +1018,26 @@ contract ApeCoinStaking is Ownable {
             uint256 bakcTokenId = _pairs[i].bakcTokenId;
 
             Position storage position = nftPosition[BAKC_POOL_ID][bakcTokenId];
+
+            if (
+                nftContracts[mainTypePoolId].ownerOf(mainTokenId) !=
+                msg.sender
+            ) revert NotOwnerOfMain();
+
+            if (
+                nftContracts[BAKC_POOL_ID].ownerOf(bakcTokenId) !=
+                msg.sender
+            ) revert NotOwnerOfBAKC();
+
             PairingStatus memory mainToSecond = mainToBakc[mainTypePoolId][mainTokenId];
             PairingStatus memory secondToMain = bakcToMain[bakcTokenId][mainTypePoolId];
 
-            require(nftContracts[mainTypePoolId].ownerOf(mainTokenId) == msg.sender, "Main Token not owned by caller");
-            require(nftContracts[BAKC_POOL_ID].ownerOf(bakcTokenId) == msg.sender, "BAKC Token not owned by caller");
-            require(mainToSecond.tokenId == bakcTokenId && mainToSecond.isPaired
-                && secondToMain.tokenId == mainTokenId && secondToMain.isPaired, "The provided Token IDs are not paired");
+            if (
+                mainToSecond.tokenId != bakcTokenId ||
+                !mainToSecond.isPaired ||
+                secondToMain.tokenId != mainTokenId ||
+                !secondToMain.isPaired
+            ) revert ProvidedTokensNotPaired();
 
             uint256 rewardsToBeClaimed = _claim(BAKC_POOL_ID, position, _recipient);
             emit ClaimRewardsPairNft(msg.sender, rewardsToBeClaimed, mainTypePoolId, mainTokenId, bakcTokenId);
@@ -985,7 +1045,7 @@ contract ApeCoinStaking is Ownable {
     }
 
     function _withdraw(uint256 _poolId, Position storage _position, uint256 _amount, address _recipient) private {
-        require(_amount <= _position.stakedAmount, "Can't withdraw more than staked amount");
+        if (_amount > _position.stakedAmount) revert ExceededStakedAmount();
 
         Pool storage pool = pools[_poolId];
 
@@ -1001,8 +1061,8 @@ contract ApeCoinStaking is Ownable {
         for(uint256 i; i < _nfts.length; ++i) {
             uint256 tokenId = _nfts[i].tokenId;
             uint256 amount = _nfts[i].amount;
-            require(nftContracts[_poolId].ownerOf(tokenId) == msg.sender, "Token not owned by caller");
-
+            if (nftContracts[_poolId].ownerOf(tokenId) != msg.sender)
+                revert CallerNotOwner();
             Position storage position = nftPosition[_poolId][tokenId];
             if (amount == position.stakedAmount) {
                 uint256 rewardsToBeClaimed = _claim(_poolId, position, _recipient);
@@ -1020,15 +1080,21 @@ contract ApeCoinStaking is Ownable {
             uint256 amount = _nfts[i].amount;
             address mainTokenOwner = nftContracts[mainTypePoolId].ownerOf(mainTokenId);
             address bakcOwner = nftContracts[BAKC_POOL_ID].ownerOf(bakcTokenId);
+
+            if (mainTokenOwner != msg.sender)
+                if (bakcOwner != msg.sender) revert CallerNotTokenOwnerInPair();
             PairingStatus memory mainToSecond = mainToBakc[mainTypePoolId][mainTokenId];
             PairingStatus memory secondToMain = bakcToMain[bakcTokenId][mainTypePoolId];
-
-            require(mainTokenOwner == msg.sender || bakcOwner == msg.sender, "At least one token in pair must be owned by caller");
-            require(mainToSecond.tokenId == bakcTokenId && mainToSecond.isPaired
-                && secondToMain.tokenId == mainTokenId && secondToMain.isPaired, "The provided Token IDs are not paired");
-
+            if (
+                mainToSecond.tokenId != bakcTokenId ||
+                !mainToSecond.isPaired ||
+                secondToMain.tokenId != mainTokenId ||
+                !secondToMain.isPaired
+            ) revert ProvidedTokensNotPaired();
             Position storage position = nftPosition[BAKC_POOL_ID][bakcTokenId];
-            require(mainTokenOwner == bakcOwner || amount == position.stakedAmount, "Split pair can't partially withdraw");
+            if (mainTokenOwner != bakcOwner)
+                if (amount != position.stakedAmount)
+                    revert SplitPairCantPartiallyWithdraw();
 
             if (amount == position.stakedAmount) {
                 uint256 rewardsToBeClaimed = _claim(BAKC_POOL_ID, position, bakcOwner);
