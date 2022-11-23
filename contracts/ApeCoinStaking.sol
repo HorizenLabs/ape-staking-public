@@ -655,19 +655,26 @@ contract ApeCoinStaking is Ownable {
         }
 
         uint256 rewards;
-        for(uint256 i = currentIndex; i < pool.timeRanges.length; ++i) {
-            TimeRange memory current = pool.timeRanges[i];
+        TimeRange memory current;
+        uint256 startTimestampHour;
+        uint256 endTimestampHour;
+        uint256 len = pool.timeRanges.length;
+        for(uint256 i = currentIndex; i < len;) {
+            current = pool.timeRanges[i];
 
-            uint256 startTimestampHour = _from <= current.startTimestampHour ? current.startTimestampHour : _from;
-            uint256 endTimestampHour = _to <= current.endTimestampHour ? _to : current.endTimestampHour;
+            startTimestampHour = _from <= current.startTimestampHour ? current.startTimestampHour : _from;
+            endTimestampHour = _to <= current.endTimestampHour ? _to : current.endTimestampHour;
             rewards = rewards + (endTimestampHour - startTimestampHour) * current.rewardsPerHour / SECONDS_PER_HOUR;
 
             if(_to <= endTimestampHour) {
                 return (rewards, i);
             }
+            unchecked {
+                ++i;
+            }
         }
 
-        return (rewards, pool.timeRanges.length - 1);
+        return (rewards, len - 1);
     }
 
     /**
@@ -1036,47 +1043,57 @@ contract ApeCoinStaking is Ownable {
 
     function _depositNft(uint256 _poolId, SingleNft[] calldata _nfts) private {
         updatePool(_poolId);
-        for(uint256 i; i < _nfts.length; ++i) {
-            uint256 tokenId = _nfts[i].tokenId;
-            uint256 amount = _nfts[i].amount;
+        uint256 tokenId;
+        uint256 amount;
+        uint256 len = _nfts.length;
+        for(uint256 i; i < len;) {
+            tokenId = _nfts[i].tokenId;
+            amount = _nfts[i].amount;
             Position storage position = nftPosition[_poolId][tokenId];
             if (position.stakedAmount == 0)
                 if (nftContracts[_poolId].ownerOf(tokenId) != msg.sender)
                     revert CallerNotOwner();
             _depositNftGuard(_poolId, position, amount);
             emit DepositNft(msg.sender, _poolId, amount, tokenId);
+            unchecked {
+                ++i;
+            }
         }
     }
 
     function _depositPairNft(uint256 mainTypePoolId, PairNftWithAmount[] calldata _nfts) private {
-        for(uint256 i; i < _nfts.length; ++i) {
-            uint256 mainTokenId = _nfts[i].mainTokenId;
-            uint256 bakcTokenId = _nfts[i].bakcTokenId;
-            uint256 amount = _nfts[i].amount;
-            Position storage position = nftPosition[BAKC_POOL_ID][bakcTokenId];
+        uint256 len = _nfts.length;
+        PairNftWithAmount memory pair;
+        Position storage position;
+        for(uint256 i; i < len;) {
+            pair = _nfts[i];
+            position = nftPosition[BAKC_POOL_ID][pair.bakcTokenId];
 
             if(position.stakedAmount == 0) {
                 if (
-                    nftContracts[mainTypePoolId].ownerOf(mainTokenId) !=
+                    nftContracts[mainTypePoolId].ownerOf(pair.mainTokenId) !=
                     msg.sender ||
-                    mainToBakc[mainTypePoolId][mainTokenId].isPaired
+                    mainToBakc[mainTypePoolId][pair.mainTokenId].isPaired
                 ) revert TokenNotOwnedOrPaired();
                 if (
-                    nftContracts[BAKC_POOL_ID].ownerOf(bakcTokenId) !=
+                    nftContracts[BAKC_POOL_ID].ownerOf(pair.bakcTokenId) !=
                     msg.sender ||
-                    bakcToMain[bakcTokenId][mainTypePoolId].isPaired
+                    bakcToMain[pair.bakcTokenId][mainTypePoolId].isPaired
                 ) revert BAKCNotOwnedOrPaired();
-                mainToBakc[mainTypePoolId][mainTokenId] = PairingStatus(uint248(bakcTokenId), true);
-                bakcToMain[bakcTokenId][mainTypePoolId] = PairingStatus(uint248(mainTokenId), true);
+                mainToBakc[mainTypePoolId][pair.mainTokenId] = PairingStatus(uint248(pair.bakcTokenId), true);
+                bakcToMain[pair.bakcTokenId][mainTypePoolId] = PairingStatus(uint248(pair.mainTokenId), true);
             } else if (
-                mainTokenId !=
-                bakcToMain[bakcTokenId][mainTypePoolId].tokenId ||
-                bakcTokenId !=
-                mainToBakc[mainTypePoolId][mainTokenId].tokenId
+                pair.mainTokenId !=
+                bakcToMain[pair.bakcTokenId][mainTypePoolId].tokenId ||
+                pair.bakcTokenId !=
+                mainToBakc[mainTypePoolId][pair.mainTokenId].tokenId
             ) revert BAKCAlreadyPaired();
 
-            _depositNftGuard(BAKC_POOL_ID, position, amount);
-            emit DepositPairNft(msg.sender, amount, mainTypePoolId, mainTokenId, bakcTokenId);
+            _depositNftGuard(BAKC_POOL_ID, position, pair.amount);
+            emit DepositPairNft(msg.sender, pair.amount, mainTypePoolId, pair.mainTokenId, pair.bakcTokenId);
+            unchecked {
+                ++i;
+            }
         }
     }
 
@@ -1108,22 +1125,34 @@ contract ApeCoinStaking is Ownable {
 
     function _claimNft(uint256 _poolId, uint256[] calldata _nfts, address _recipient) private {
         updatePool(_poolId);
-        for(uint256 i; i < _nfts.length; ++i) {
-            uint256 tokenId = _nfts[i];
+        uint256 tokenId;
+        uint256 rewardsToBeClaimed;
+        uint256 len = _nfts.length;
+        for(uint256 i; i < len;) {
+            tokenId = _nfts[i];
             Position storage position = nftPosition[_poolId][tokenId];
             if (nftContracts[_poolId].ownerOf(tokenId) != msg.sender)
                 revert CallerNotOwner();
-            uint256 rewardsToBeClaimed = _claim(_poolId, position, _recipient);
+            rewardsToBeClaimed = _claim(_poolId, position, _recipient);
             emit ClaimRewardsNft(msg.sender, _poolId, rewardsToBeClaimed, tokenId);
+            unchecked {
+                ++i;
+            }
         }
     }
 
     function _claimPairNft(uint256 mainTypePoolId, PairNft[] calldata _pairs, address _recipient) private {
-        for(uint256 i; i < _pairs.length; ++i) {
-            uint256 mainTokenId = _pairs[i].mainTokenId;
-            uint256 bakcTokenId = _pairs[i].bakcTokenId;
+        uint256 len = _pairs.length;
+        uint256 mainTokenId;
+        uint256 bakcTokenId;
+        Position storage position;
+        PairingStatus storage mainToSecond;
+        PairingStatus storage secondToMain;
+        for(uint256 i; i < len;) {
+            mainTokenId = _pairs[i].mainTokenId;
+            bakcTokenId = _pairs[i].bakcTokenId;
 
-            Position storage position = nftPosition[BAKC_POOL_ID][bakcTokenId];
+            position = nftPosition[BAKC_POOL_ID][bakcTokenId];
 
             if (
                 nftContracts[mainTypePoolId].ownerOf(mainTokenId) !=
@@ -1135,8 +1164,8 @@ contract ApeCoinStaking is Ownable {
                 msg.sender
             ) revert NotOwnerOfBAKC();
 
-            PairingStatus memory mainToSecond = mainToBakc[mainTypePoolId][mainTokenId];
-            PairingStatus memory secondToMain = bakcToMain[bakcTokenId][mainTypePoolId];
+            mainToSecond = mainToBakc[mainTypePoolId][mainTokenId];
+            secondToMain = bakcToMain[bakcTokenId][mainTypePoolId];
 
             if (
                 mainToSecond.tokenId != bakcTokenId ||
@@ -1147,6 +1176,9 @@ contract ApeCoinStaking is Ownable {
 
             uint256 rewardsToBeClaimed = _claim(BAKC_POOL_ID, position, _recipient);
             emit ClaimRewardsPairNft(msg.sender, rewardsToBeClaimed, mainTypePoolId, mainTokenId, bakcTokenId);
+            unchecked {
+                ++i;
+            }
         }
     }
 
@@ -1167,52 +1199,67 @@ contract ApeCoinStaking is Ownable {
 
     function _withdrawNft(uint256 _poolId, SingleNft[] calldata _nfts, address _recipient) private {
         updatePool(_poolId);
-        for(uint256 i; i < _nfts.length; ++i) {
-            uint256 tokenId = _nfts[i].tokenId;
-            uint256 amount = _nfts[i].amount;
+        uint256 tokenId;
+        uint256 amount;
+        uint256 len = _nfts.length; // OTPIMIZE: asigning variable to memory, to avoid being called on each iteration
+        Position storage position;
+        for(uint256 i; i < len;) {
+            tokenId = _nfts[i].tokenId;
+            amount = _nfts[i].amount;
             if (nftContracts[_poolId].ownerOf(tokenId) != msg.sender)
                 revert CallerNotOwner();
-            Position storage position = nftPosition[_poolId][tokenId];
+            position = nftPosition[_poolId][tokenId];
             if (amount == position.stakedAmount) {
                 uint256 rewardsToBeClaimed = _claim(_poolId, position, _recipient);
                 emit ClaimRewardsNft(msg.sender, _poolId, rewardsToBeClaimed, tokenId);
             }
             _withdraw(_poolId, position, amount, _recipient);
             emit WithdrawNft(msg.sender, _poolId, amount, _recipient, tokenId);
+            unchecked {
+                ++i;
+            }
         }
     }
 
     function _withdrawPairNft(uint256 mainTypePoolId, PairNftWithAmount[] calldata _nfts) private {
-        for(uint256 i; i < _nfts.length; ++i) {
-            uint256 mainTokenId = _nfts[i].mainTokenId;
-            uint256 bakcTokenId = _nfts[i].bakcTokenId;
-            uint256 amount = _nfts[i].amount;
-            address mainTokenOwner = nftContracts[mainTypePoolId].ownerOf(mainTokenId);
-            address bakcOwner = nftContracts[BAKC_POOL_ID].ownerOf(bakcTokenId);
+        address mainTokenOwner;
+        address bakcOwner;
+        PairNftWithAmount memory pair;
+        PairingStatus storage mainToSecond; //OPTIMIZE: referencing storage is cheaper than copying to memory each time
+        PairingStatus storage secondToMain; //OPTIMIZE: referencing storage is cheaper than copying to memory each time
+        Position storage position;
+        uint256 len = _nfts.length;
+        for(uint256 i; i < len;) {
+            pair = _nfts[i];
+            mainTokenOwner = nftContracts[mainTypePoolId].ownerOf(pair.mainTokenId);
+            bakcOwner = nftContracts[BAKC_POOL_ID].ownerOf(pair.bakcTokenId);
 
             if (mainTokenOwner != msg.sender)
                 if (bakcOwner != msg.sender) revert CallerNotTokenOwnerInPair();
-            PairingStatus memory mainToSecond = mainToBakc[mainTypePoolId][mainTokenId];
-            PairingStatus memory secondToMain = bakcToMain[bakcTokenId][mainTypePoolId];
+            mainToSecond = mainToBakc[mainTypePoolId][pair.mainTokenId];
+            secondToMain = bakcToMain[pair.bakcTokenId][mainTypePoolId];
             if (
-                mainToSecond.tokenId != bakcTokenId ||
+                mainToSecond.tokenId != pair.bakcTokenId ||
                 !mainToSecond.isPaired ||
-                secondToMain.tokenId != mainTokenId ||
+                secondToMain.tokenId != pair.mainTokenId ||
                 !secondToMain.isPaired
             ) revert ProvidedTokensNotPaired();
-            Position storage position = nftPosition[BAKC_POOL_ID][bakcTokenId];
+            position = nftPosition[BAKC_POOL_ID][pair.bakcTokenId];
             if (mainTokenOwner != bakcOwner)
-                if (amount != position.stakedAmount)
+                if (pair.amount != position.stakedAmount)
                     revert SplitPairCantPartiallyWithdraw();
 
-            if (amount == position.stakedAmount) {
+            if (pair.amount == position.stakedAmount) {
                 uint256 rewardsToBeClaimed = _claim(BAKC_POOL_ID, position, bakcOwner);
-                mainToBakc[mainTypePoolId][mainTokenId] = PairingStatus(0, false);
-                bakcToMain[bakcTokenId][mainTypePoolId] = PairingStatus(0, false);
-                emit ClaimRewardsPairNft(msg.sender, rewardsToBeClaimed, mainTypePoolId, mainTokenId, bakcTokenId);
+                mainToBakc[mainTypePoolId][pair.mainTokenId] = PairingStatus(0, false);
+                bakcToMain[pair.bakcTokenId][mainTypePoolId] = PairingStatus(0, false);
+                emit ClaimRewardsPairNft(msg.sender, rewardsToBeClaimed, mainTypePoolId, pair.mainTokenId, pair.bakcTokenId);
             }
-            _withdraw(BAKC_POOL_ID, position, amount, mainTokenOwner);
-            emit WithdrawPairNft(msg.sender, amount, mainTypePoolId, mainTokenId, bakcTokenId);
+            _withdraw(BAKC_POOL_ID, position, pair.amount, mainTokenOwner);
+            emit WithdrawPairNft(msg.sender, pair.amount, mainTypePoolId, pair.mainTokenId, pair.bakcTokenId);
+            unchecked {
+                ++i;
+            }
         }
     }
 
