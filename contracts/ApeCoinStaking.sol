@@ -43,7 +43,12 @@ access to the Smart Contract.
 pragma solidity 0.8.10;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+/** OPTIMIZE:
+   SafeERC20 is not needed in the case of apecoin staking, since it is meant for
+   when there is an interaction with unknown tokens which might not adhere to ERC20 standard
+   but since APE$ as displayed on ETHERSCAN adhere to it and returns true on successful transfer or transfreFrom
+   or reverts with a valid message, then it's safe to transfer and transferFrom directly without extra check for return data
+ */
 import "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC721/extensions/ERC721Enumerable.sol";
@@ -84,7 +89,6 @@ error SplitPairCantPartiallyWithdraw();
  */
 contract ApeCoinStaking is Ownable {
 
-    using SafeERC20 for IERC20;
     using SafeCast for uint256;
     using SafeCast for int256;
 
@@ -379,6 +383,12 @@ contract ApeCoinStaking is Ownable {
 
         Position storage position = addressPosition[_recipient];
         _deposit(APECOIN_POOL_ID, position, _amount);
+        /* 
+         * safeTransferFrom is an overkill, after checking APECOIN ERC20 contract on etherscan,
+         * you would notice that it adhere to ERC20 token standard and returns actually true on successful transferFrom
+         * or reverts.
+         */
+        apeCoin.transferFrom(msg.sender, address(this), _amount);
 
         emit Deposit(msg.sender, _amount, _recipient);
     }
@@ -518,7 +528,11 @@ contract ApeCoinStaking is Ownable {
             uint256 rewardsToBeClaimed = _claim(APECOIN_POOL_ID, position, _recipient);
             emit ClaimRewards(msg.sender, rewardsToBeClaimed, _recipient);
         }
-        _withdraw(APECOIN_POOL_ID, position, _amount, _recipient);
+        _withdraw(APECOIN_POOL_ID, position, _amount);
+        // SafeTransfer is an overkill, after checking APECOIN ERC20 contract on etherscan,
+        // you would notice that it adhere to ERC20 token standard and returns actually true on successful transfer
+        // or reverts.
+        apeCoin.transfer(_recipient, _amount);
         emit Withdraw(msg.sender, _amount, _recipient);
     }
 
@@ -1060,6 +1074,8 @@ contract ApeCoinStaking is Ownable {
     }
 
     // Private Methods - shared logic
+    /// @notice trasnferFrom must be called after deposit logic is complete
+    // seperating deposit logic and deposit transfer for gas optimization in loops
     function _deposit(uint256 _poolId, Position storage _position, uint256 _amount) private {
         Pool storage pool = pools[_poolId];
 
@@ -1069,8 +1085,6 @@ contract ApeCoinStaking is Ownable {
         _position.rewardsDebt += (
             int256(_amount * uint256(pool.accumulatedRewardsPerShare))
         ).toInt176();
-
-        apeCoin.safeTransferFrom(msg.sender, address(this), _amount);
     }
 
     function _depositNft(uint256 _poolId, SingleNft[] calldata _nfts) private {
@@ -1079,6 +1093,7 @@ contract ApeCoinStaking is Ownable {
         uint256 amount;
         Position storage position;
         uint256 len = _nfts.length;
+        uint256 totalDeposit;
         for(uint256 i; i < len;) {
             tokenId = _nfts[i].tokenId;
             position = nftPosition[_poolId][tokenId];
@@ -1087,15 +1102,24 @@ contract ApeCoinStaking is Ownable {
                     revert CallerNotOwner();
             amount = _nfts[i].amount;
             _depositNftGuard(_poolId, position, amount);
+            totalDeposit += amount;
             emit DepositNft(msg.sender, _poolId, amount, tokenId);
             unchecked {
                 ++i;
             }
         }
+        if (totalDeposit > 0)
+            /* OPTIMIZE:
+             * safeTransferFrom is an overkill, after checking APECOIN ERC20 contract on etherscan,
+             * you would notice that it adhere to ERC20 token standard and returns actually true on successful transferFrom
+             * or reverts.
+             */
+            apeCoin.transferFrom(msg.sender, address(this), totalDeposit);
     }
 
     function _depositPairNft(uint256 mainTypePoolId, PairNftWithAmount[] calldata _nfts) private {
         uint256 len = _nfts.length;
+        uint256 totalDeposit;
         PairNftWithAmount memory pair;
         Position storage position;
         for(uint256 i; i < len;) {
@@ -1123,11 +1147,19 @@ contract ApeCoinStaking is Ownable {
             ) revert BAKCAlreadyPaired();
 
             _depositNftGuard(BAKC_POOL_ID, position, pair.amount);
+            totalDeposit += pair.amount;
             emit DepositPairNft(msg.sender, pair.amount, mainTypePoolId, pair.mainTokenId, pair.bakcTokenId);
             unchecked {
                 ++i;
             }
         }
+        if (totalDeposit > 0)
+            /* OPTIMIZE:
+             * safeTransferFrom is an overkill, after checking APECOIN ERC20 contract on etherscan,
+             * you would notice that it adhere to ERC20 token standard and returns actually true on successful transferFrom
+             * or reverts.
+             */
+            apeCoin.transferFrom(msg.sender, address(this), totalDeposit);
     }
 
     function _depositNftGuard(uint256 _poolId, Position storage _position, uint256 _amount) private {
@@ -1141,19 +1173,22 @@ contract ApeCoinStaking is Ownable {
         _deposit(_poolId, _position, _amount);
     }
 
-    function _claim(uint256 _poolId, Position storage _position, address _recipient) private returns (uint256) {
+    function _claim(uint256 _poolId, Position storage _position, address _recipient) private returns (uint256 rewardsToBeClaimed) {
         Pool storage pool = pools[_poolId];
 
         int256 accumulatedApeCoins = (uint256(_position.stakedAmount) *
             pool.accumulatedRewardsPerShare).toInt256();
-        uint256 rewardsToBeClaimed = (accumulatedApeCoins - _position.rewardsDebt).toUint256() / APE_COIN_PRECISION;
+        rewardsToBeClaimed = (accumulatedApeCoins - _position.rewardsDebt).toUint256() / APE_COIN_PRECISION;
 
         _position.rewardsDebt = (accumulatedApeCoins).toInt176();
 
+        // SafeTransfer is an overkill, after checking APECOIN ERC20 contract on etherscan,
+        // you would notice that it adhere to ERC20 token standard and returns actually true on successful transfer
+        // or reverts.
+
         if (rewardsToBeClaimed != 0) {
-            apeCoin.safeTransfer(_recipient, rewardsToBeClaimed);
+            apeCoin.transfer(_recipient, rewardsToBeClaimed);
         }
-        return rewardsToBeClaimed;
     }
 
     function _claimNft(uint256 _poolId, uint256[] calldata _nfts, address _recipient) private {
@@ -1214,8 +1249,9 @@ contract ApeCoinStaking is Ownable {
             }
         }
     }
-
-    function _withdraw(uint256 _poolId, Position storage _position, uint256 _amount, address _recipient) private {
+    /// @notice trasnfer must be called after withdraw logic is complete
+    // seperating withdraw logic and withdraw transfer for gas optimization in loops
+    function _withdraw(uint256 _poolId, Position storage _position, uint256 _amount) private {
         if (_amount > _position.stakedAmount) revert ExceededStakedAmount();
 
         Pool storage pool = pools[_poolId];
@@ -1226,8 +1262,6 @@ contract ApeCoinStaking is Ownable {
         _position.rewardsDebt -= (
             int256(_amount * pool.accumulatedRewardsPerShare)
         ).toInt176();
-
-        apeCoin.safeTransfer(_recipient, _amount);
     }
 
     function _withdrawNft(uint256 _poolId, SingleNft[] calldata _nfts, address _recipient) private {
@@ -1235,6 +1269,7 @@ contract ApeCoinStaking is Ownable {
         uint256 tokenId;
         uint256 amount;
         uint256 len = _nfts.length; // OTPIMIZE: asigning variable to memory, to avoid being called on each iteration
+        uint256 totalWithdraw;
         Position storage position;
         for(uint256 i; i < len;) {
             tokenId = _nfts[i].tokenId;
@@ -1246,12 +1281,18 @@ contract ApeCoinStaking is Ownable {
                 uint256 rewardsToBeClaimed = _claim(_poolId, position, _recipient);
                 emit ClaimRewardsNft(msg.sender, _poolId, rewardsToBeClaimed, tokenId);
             }
-            _withdraw(_poolId, position, amount, _recipient);
+            _withdraw(_poolId, position, amount);
+            totalWithdraw += amount;
             emit WithdrawNft(msg.sender, _poolId, amount, _recipient, tokenId);
             unchecked {
                 ++i;
             }
         }
+        // OPTIMIZE: external call only once
+        // SafeTransfer is an overkill, after checking APECOIN ERC20 contract on etherscan,
+        // you would notice that it adhere to ERC20 token standard and returns actually true on successful transfer
+        // or reverts.
+        if (totalWithdraw > 0) apeCoin.transfer(_recipient, totalWithdraw);
     }
 
     function _withdrawPairNft(uint256 mainTypePoolId, PairNftWithAmount[] calldata _nfts) private {
@@ -1288,7 +1329,11 @@ contract ApeCoinStaking is Ownable {
                 bakcToMain[pair.bakcTokenId][mainTypePoolId] = PairingStatus(0, false);
                 emit ClaimRewardsPairNft(msg.sender, rewardsToBeClaimed, mainTypePoolId, pair.mainTokenId, pair.bakcTokenId);
             }
-            _withdraw(BAKC_POOL_ID, position, pair.amount, mainTokenOwner);
+            _withdraw(BAKC_POOL_ID, position, pair.amount);
+            // SafeTransfer is an overkill, after checking APECOIN ERC20 contract on etherscan,
+            // you would notice that it adhere to ERC20 token standard and returns actually true on successful transfer
+            // or reverts.
+            apeCoin.transfer(mainTokenOwner, pair.amount);
             emit WithdrawPairNft(msg.sender, pair.amount, mainTypePoolId, pair.mainTokenId, pair.bakcTokenId);
             unchecked {
                 ++i;
