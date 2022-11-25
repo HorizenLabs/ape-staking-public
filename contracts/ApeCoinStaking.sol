@@ -1327,8 +1327,8 @@ contract ApeCoinStaking is Ownable {
 
             if (pair.amount == position.stakedAmount) {
                 uint256 rewardsToBeClaimed = _claim(BAKC_POOL_ID, position, bakcOwner);
-                mainToBakc[mainTypePoolId][pair.mainTokenId] = PairingStatus(0, false);
-                bakcToMain[pair.bakcTokenId][mainTypePoolId] = PairingStatus(0, false);
+                delete mainToBakc[mainTypePoolId][pair.mainTokenId];
+                delete bakcToMain[pair.bakcTokenId][mainTypePoolId];
                 emit ClaimRewardsPairNft(msg.sender, rewardsToBeClaimed, mainTypePoolId, pair.mainTokenId, pair.bakcTokenId);
             }
             _withdraw(BAKC_POOL_ID, position, pair.amount);
