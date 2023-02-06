@@ -48,6 +48,12 @@ module.exports = {
             url: `https://eth-goerli.alchemyapi.io/v2/${ALCHEMY_KEY}`,
             accounts: accountsTestnet
         },
+        zen: {
+         url: 'https://evm-tn-m2.horizenlabs.io/ethv1',
+         chainId: 1661,
+         accounts: accountsTestnet,
+         gasPrice: gasPrice
+        },
     },
     etherscan: {
         // Your API key for Etherscan
